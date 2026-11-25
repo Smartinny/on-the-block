@@ -150,8 +150,30 @@ async function usage() {
   console.log(`usage: ${Object.keys(p).length} players through week ${lastWeek}`);
 }
 
+// Headshots: nflverse rosters map Sleeper IDs to NFL.com/ESPN photo URLs.
+async function headshots() {
+  const year = new Date().getUTCMonth() < 2 ? new Date().getUTCFullYear() - 1 : new Date().getUTCFullYear();
+  const res = await fetch(`https://github.com/nflverse/nflverse-data/releases/download/rosters/roster_${year}.csv`);
+  if (!res.ok) { console.warn(`headshots: ${res.status}, skipped`); return; }
+  const lines = (await res.text()).trim().split(/\r?\n/);
+  const split = (line) => { const o = []; let c = "", q = false; for (const ch of line) { if (ch === '"') q = !q; else if (ch === "," && !q) { o.push(c); c = ""; } else c += ch; } o.push(c); return o; };
+  const h = split(lines[0]);
+  const iS = h.indexOf("sleeper_id"), iU = h.indexOf("headshot_url");
+  if (iS < 0 || iU < 0) { console.warn("headshots: columns missing, skipped"); return; }
+  const map = {};
+  for (const line of lines.slice(1)) {
+    const c = split(line);
+    const id = c[iS]?.replace(/\.0$/, ""), url = c[iU];
+    if (id && id !== "NA" && url && url.startsWith("http")) map[id] = url;
+  }
+  await writeFile("data/headshots.json", JSON.stringify(map));
+  console.log(`headshots: ${Object.keys(map).length}`);
+}
+
 await mkdir("data/values", { recursive: true });
 await mkdir("data/history", { recursive: true });
+// Values are required; the rest are optional extras that must not block a refresh.
 await fantasyCalc();
-await dynastyProcess();
-await usage();
+for (const [name, job] of [["dynastyprocess", dynastyProcess], ["usage", usage], ["headshots", headshots]]) {
+  try { await job(); } catch (e) { console.warn(`${name} skipped: ${e.message}`); }
+}

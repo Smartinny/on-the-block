@@ -80,12 +80,13 @@ export function bestLineup(ids, slots, players) {
   const pool = ids.map((id) => players.get(id)).filter(Boolean).sort((a, b) => b.redraft - a.redraft);
   const used = new Set();
   let total = 0;
-  const order = [...slots].sort((a, b) => ELIGIBLE[a].length - ELIGIBLE[b].length);
-  for (const slot of order) {
-    const pick = pool.find((p) => !used.has(p.id) && ELIGIBLE[slot].includes(p.pos));
-    if (pick) { used.add(pick.id); total += pick.redraft; }
+  const filled = slots.map((slot, i) => ({ slot, i, id: null }));
+  const order = [...filled].sort((a, b) => ELIGIBLE[a.slot].length - ELIGIBLE[b.slot].length);
+  for (const f of order) {
+    const pick = pool.find((p) => !used.has(p.id) && ELIGIBLE[f.slot].includes(p.pos));
+    if (pick) { used.add(pick.id); total += pick.redraft; f.id = pick.id; }
   }
-  return { total, starters: used };
+  return { total, starters: used, slots: filled };
 }
 
 // ---------- league model ----------
@@ -293,18 +294,88 @@ function diversify(list, max) {
   return [...first.sort((a, b) => b.score - a.score), ...rest].slice(0, max);
 }
 
-/** Shop players in one league: every buyer, ranked by their best package. */
-export function shop(model, myRosterId, sellIds, opts = {}) {
+/** Shop any mix of your assets (players and/or picks) in one league. */
+export function shopAssets(model, myRosterId, sellAssets, opts = {}) {
   const me = model.byId.get(myRosterId);
-  const sellAssets = sellIds.map((id) => playerAsset(id, model.values)).filter(Boolean);
   if (!me || !sellAssets.length) return [];
   const buyers = [];
   for (const t of model.teams) {
     if (t.rosterId === myRosterId) continue;
     const packages = packagesForBuyer(model, me, t, sellAssets, opts);
+    for (const p of packages) p.buyer = t;
     if (packages.length) buyers.push({ team: t, packages, best: packages[0].score });
   }
   return buyers.sort((a, b) => b.best - a.best);
+}
+
+/** Shop players in one league: every buyer, ranked by their best package. */
+export function shop(model, myRosterId, sellIds, opts = {}) {
+  return shopAssets(model, myRosterId, sellIds.map((id) => playerAsset(id, model.values)).filter(Boolean), opts);
+}
+
+/** Every package from every buyer, flattened and ranked. */
+export function allPackages(buyers) {
+  return buyers.flatMap((b) => b.packages).sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Ways to sell around one player: on his own, with a small add-on,
+ * a similar-value teammate instead, or both together.
+ */
+export function sellVariations(model, myRosterId, playerId) {
+  const me = model.byId.get(myRosterId);
+  const base = playerAsset(playerId, model.values);
+  if (!me || !base) return [];
+  const out = [{ key: "solo", label: base.label, sub: `${base.pos} · ${fmtK(base.value)}`, assets: [base] }];
+  const addOn = me.picks.filter((k) => k.round >= 2 && k.value <= base.value * 0.35).sort((a, b) => a.season - b.season || a.round - b.round)[0];
+  if (addOn) out.push({ key: "plus", label: `${base.label} + ${addOn.label}`, sub: "reach for a bigger return", assets: [base, addOn] });
+  const similar = me.playerIds.filter((id) => id !== playerId).map((id) => playerAsset(id, model.values))
+    .filter((a) => a && Math.abs(a.value / base.value - 1) <= 0.15).sort((a, b) => Math.abs(a.value - base.value) - Math.abs(b.value - base.value)).slice(0, 2);
+  for (const a of similar) out.push({ key: `alt:${a.id}`, label: a.label, sub: `similar value · ${a.pos} ${a.age ?? ""}`.trim(), assets: [a] });
+  if (similar[0]) out.push({ key: "bundle", label: `${base.label} + ${similar[0].label}`, sub: `bundle · ${fmtK(base.value + similar[0].value)}`, assets: [base, similar[0]] });
+  return out;
+}
+
+export const fmtK = (v) => (v >= 1000 ? (v / 1000).toFixed(1) + "k" : String(Math.round(v)));
+
+/** What a package does to your team (and why they say yes). */
+export function tradeImpact(model, me, buyer, give, get) {
+  const { settings, values } = model;
+  const ids = (as) => new Set(as.filter((a) => a.kind === "player").map((a) => a.id));
+  const keys = (as) => new Set(as.map((a) => a.key));
+  const giveIds = ids(give), getIds = ids(get), giveKeys = keys(give), getKeys = keys(get);
+  const myAfterIds = [...me.playerIds.filter((id) => !giveIds.has(id)), ...getIds];
+  const before = bestLineup(me.playerIds, settings.slots, values.players);
+  const after = bestLineup(myAfterIds, settings.slots, values.players);
+  const pickVal = (ps) => ps.reduce((x, k) => x + k.value, 0);
+  const rosterVal = (pids) => pids.reduce((x, id) => x + (values.players.get(id)?.value ?? 0), 0);
+  const myPicksAfter = [...me.picks.filter((k) => !giveKeys.has(k.key)), ...get.filter((a) => a.kind === "pick")];
+  const futBefore = rosterVal(me.playerIds) + pickVal(me.picks);
+  const futAfter = rosterVal(myAfterIds) + pickVal(myPicksAfter);
+  const coreAge = (pids) => {
+    const top = pids.map((id) => values.players.get(id)).filter((p) => p && p.age).sort((a, b) => b.value - a.value).slice(0, 10);
+    return top.reduce((x, p) => x + p.age, 0) / Math.max(1, top.length);
+  };
+  const firsts = (ps) => ps.filter((k) => k.round === 1).length;
+  // Their lineup rank before and after.
+  const theirAfterIds = [...buyer.playerIds.filter((id) => !getIds.has(id)), ...giveIds];
+  const theirAfter = bestLineup(theirAfterIds, settings.slots, values.players).total;
+  const others = model.teams.filter((t) => t.rosterId !== buyer.rosterId).map((t) => t.lineup);
+  const rankOf = (v) => 1 + others.filter((o) => o > v).length;
+  const slotName = (s) => ({ SUPER_FLEX: "SF", WRRB_FLEX: "W/R", REC_FLEX: "W/T" }[s] ?? s);
+  return {
+    winNow: before.total ? after.total / before.total - 1 : 0,
+    future: futBefore ? futAfter / futBefore - 1 : 0,
+    ageBefore: coreAge(me.playerIds), ageAfter: coreAge(myAfterIds),
+    firstsBefore: firsts(me.picks), firstsAfter: firsts(myPicksAfter),
+    lineupAfter: after.slots.map((f) => {
+      const p = f.id ? values.players.get(f.id) : null;
+      return { slot: slotName(f.slot), id: f.id, name: p?.name ?? "Empty", pos: p?.pos ?? "", changed: !!f.id && !before.starters.has(f.id) };
+    }),
+    lostStarters: [...before.starters].filter((id) => !after.starters.has(id)).map((id) => values.players.get(id)?.name),
+    theirRankBefore: rankOf(buyer.lineup), theirRankAfter: rankOf(theirAfter),
+    theirGain: buyer.lineup ? theirAfter / buyer.lineup - 1 : 0,
+  };
 }
 
 // ---------- sell window ----------

@@ -121,3 +121,26 @@ test("sell window opens on a bump and reads usage", () => {
   assert.equal(closed.open, false);
   assert.equal(usageTag({ ro: 12, po: 8, rp: 15, pp: 12, td: 0.1 }).tag, "more work");
 });
+
+import { sellVariations, shopAssets, allPackages, tradeImpact } from "../src/engine.js";
+
+test("sell variations, asset shopping and impact", () => {
+  const values = buildValueIndex(fc, dp, settingsFromLeague(league));
+  const m = buildLeague({ league, rosters, users, tradedPicks, values });
+  const me = m.teams.find((t) => t.tier === "rebuilder");
+  const vet = me.playerIds.map((id) => values.players.get(id)).filter((p) => p.age >= 27 && p.value > 1500).sort((a, b) => b.value - a.value)[0];
+  const vars = sellVariations(m, me.rosterId, vet.id);
+  console.log("variations:", vars.map((v) => v.label).join(" | "));
+  assert.ok(vars.length >= 1 && vars[0].assets[0].id === vet.id);
+  for (const v of vars) {
+    const pk = allPackages(shopAssets(m, me.rosterId, v.assets, { myMode: "rebuild" }));
+    console.log(`  ${v.label}: ${pk.length} packages`);
+    if (!pk.length) continue;
+    const p = pk[0];
+    const imp = tradeImpact(m, me, p.buyer, p.give, p.get);
+    assert.ok(Number.isFinite(imp.winNow) && Number.isFinite(imp.future));
+    assert.equal(imp.lineupAfter.length, 10);
+    assert.ok(imp.theirRankAfter <= imp.theirRankBefore, "buyer should not get worse");
+    if (v.key === "solo") console.log(`  impact: winNow ${(imp.winNow * 100).toFixed(1)}% future ${(imp.future * 100).toFixed(1)}% age ${imp.ageBefore.toFixed(1)}→${imp.ageAfter.toFixed(1)} 1sts ${imp.firstsBefore}→${imp.firstsAfter} rank ${imp.theirRankBefore}→${imp.theirRankAfter} lost ${imp.lostStarters}`);
+  }
+});
