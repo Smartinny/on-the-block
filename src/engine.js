@@ -319,7 +319,12 @@ export function shop(model, myRosterId, sellIds, opts = {}) {
 
 /** Every package from every buyer, flattened and ranked. */
 export function allPackages(buyers) {
-  return buyers.flatMap((b) => b.packages).sort((a, b) => b.score - a.score);
+  const seen = new Set();
+  return buyers.flatMap((b) => b.packages).sort((a, b) => b.score - a.score).filter((p) => {
+    // Two picks with the same label (e.g. two mid 2027 1sts) read as the same offer: keep one.
+    const sig = `${p.buyer.rosterId}|${p.give.map((a) => a.label).sort()}|${p.get.map((a) => a.label).sort()}`;
+    return !seen.has(sig) && seen.add(sig);
+  });
 }
 
 /**
