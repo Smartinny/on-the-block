@@ -63,16 +63,18 @@ export function buildValueIndex(fc, dp, settings) {
     let redraft = p.rv > 0 ? p.rv : p.v * 0.5;
     if (p.pos === "TE" && settings.tep > 0) { value *= tepMult; redraft *= tepMult; }
     players.set(p.id, {
-      id: p.id, name: p.name, pos: p.pos, team: p.team, age: p.age,
+      id: p.id, name: p.name, pos: p.pos, team: p.team, age: p.age != null ? Math.floor(p.age) : null,
       value: Math.round(value), redraft: Math.round(redraft), fcValue: p.v, trend30: p.t30 ?? 0,
     });
   }
-  const pickGeneric = new Map();
+  const pickGeneric = new Map(), pickBanded = new Map();
   for (const k of fc.picks ?? []) {
-    const m = /^(\d{4})\s+(?:Round\s+)?(\d)(?:st|nd|rd|th)?$/i.exec(k.name.trim());
-    if (m) pickGeneric.set(`${m[1]}-${m[2]}`, k.v);
+    const m = /^(\d{4})\s+(?:Round\s+)?(\d)(?:st|nd|rd|th)?(?:\s+\((Early|Mid|Late)\))?$/i.exec(k.name.trim());
+    if (!m) continue;
+    if (m[3]) pickBanded.set(`${m[1]}-${m[2]}-${m[3].toLowerCase()}`, k.v);
+    else pickGeneric.set(`${m[1]}-${m[2]}`, k.v);
   }
-  return { players, pickGeneric };
+  return { players, pickGeneric, pickBanded };
 }
 
 // ---------- lineups ----------
@@ -150,11 +152,13 @@ function pickAsset(season, round, origTeam, settings, values, n) {
   const raw = band === "early" ? mults[0] : band === "late" ? mults[2] : 1;
   const conf = BAND_CONF[Math.min(Math.max(yearsOut, 0), 2)];
   const mult = 1 + (raw - 1) * conf;
+  // FantasyCalc prices early/mid/late for the next draft itself: use the market's number.
+  const market = values.pickBanded?.get(`${season}-${round}-${band}`);
   const own = origTeam ? ` (${origTeam.name})` : "";
   return {
     key: `k:${season}-${round}-${origTeam?.rosterId}`, kind: "pick", season, round, band,
     label: `${season} ${band === "mid" ? "" : band[0].toUpperCase() + band.slice(1) + " "}${ROUND_LABEL[round] ?? round + "th"}`,
-    owner: own, value: Math.round(generic * mult), redraft: 0, age: null, pos: "PICK",
+    owner: own, value: Math.round(market ?? generic * mult), redraft: 0, age: null, pos: "PICK",
   };
 }
 
