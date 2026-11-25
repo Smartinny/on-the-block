@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: "17 16 * * *" # ~3am Melbourne
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["scripts/**", ".github/workflows/**"]
 
 permissions:
   contents: write
