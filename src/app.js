@@ -129,7 +129,7 @@ function renderShop() {
     <div class="chips">${CATS.filter(([k]) => k === "all" || counts[k]).map(([k, l]) => `<button class="chip" aria-pressed="${S.filter === k}" data-cat="${k}">${esc(l)} ${counts[k]}</button>`).join("")}</div>
     ${list.map((p, i) => `<button class="row-btn" aria-pressed="${i === S.sel}" data-i="${i}">
       <span><span class="flex" style="gap:8px"><b>${esc(p.buyer.name)}</b><span class="muted small">${esc(p.type)}</span></span>
-      <span class="gets">${p.get.map((a) => `<span class="get">${icon(a, 30)}${esc(a.kind === "pick" ? a.label : shortName(a.label) + (a.age ? " " + a.age : ""))}</span>`).join("")}</span></span>
+      <span class="gets">${p.get.map((a) => `<span class="get">${icon(a, 30)}${esc(a.kind === "pick" ? a.label : shortName(a.label) + (a.age ? " " + a.age : ""))}${a.injury ? ` <b style="color:var(--bad)">${esc(a.injury.split(" ")[0])}</b>` : ""}</span>`).join("")}</span></span>
       <span><span class="score" style="display:block;color:${i === S.sel ? "var(--hammer)" : "inherit"}">${p.score}</span><span class="small" style="display:block;text-align:right;font-weight:700;color:${p.odds === "Likely" ? "var(--good)" : p.odds === "Fair shot" ? "var(--warn)" : "var(--muted)"}">${esc(p.odds)}</span></span>
     </button>`).join("") || `<div class="empty small">No packages land inside your value band. Widen it on the Sell list tab, or try another tab above.</div>`}
   </aside>`;
@@ -148,8 +148,8 @@ function renderShop() {
 function sideHtml(assets, big) {
   return assets.map((a, i) => {
     const size = i === 0 && big ? 96 : 64;
-    const sub = a.kind === "pick" ? `${a.band === "mid" ? "" : `projected ${a.band} · `}from ${a.owner.replace(/[()]/g, "").trim() || "?"}` : `${a.pos} · ${a.age ?? "?"}${a.team ? " · " + a.team : ""}`;
-    return `<div class="asset">${icon(a, size)}<div><div class="nm" style="font-size:${size > 64 ? 32 : 24}px">${esc(a.label)}</div><div class="muted small">${esc(sub)}</div><div class="cond" style="font-weight:800;font-size:20px;margin-top:4px">${fmtK(a.value)}</div></div></div>`;
+    const sub = a.kind === "pick" ? `${a.band === "mid" ? "" : `projected ${a.band} · `}from ${a.owner.replace(/[()]/g, "").trim() || "?"}` : `${a.pos} · ${a.age ?? "?"}${a.team ? " · " + a.team : ""} · ${a.ppg} pts/gm`;
+    return `<div class="asset">${icon(a, size)}<div><div class="nm" style="font-size:${size > 64 ? 32 : 24}px">${esc(a.label)}</div><div class="muted small">${esc(sub)}</div>${a.injury ? `<span class="pill bad">${esc(a.injury)}</span>` : ""}<div class="cond" style="font-weight:800;font-size:20px;margin-top:4px">${fmtK(a.value)}</div></div></div>`;
   }).join("");
 }
 

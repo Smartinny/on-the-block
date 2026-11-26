@@ -130,7 +130,7 @@ async function usage() {
   const p = {};
   const avg = (a, f) => (a.length ? a.reduce((x, y) => x + f(y), 0) / a.length : null);
   for (const [id, games] of Object.entries(per)) {
-    if (games.length < 2) continue;
+    if (games.length < 1) continue;
     const recent = games.filter((g) => g.w > lastWeek - 3);
     const prior = games.filter((g) => g.w <= lastWeek - 3);
     if (!recent.length) continue;
@@ -144,10 +144,27 @@ async function usage() {
       td: recentPts > 0 ? r1(recent.reduce((x, g) => x + g.tdPts, 0) / recentPts) : 0,
       rs: r1(avg(recent.filter((g) => g.snap != null), (g) => g.snap)),
       ps: r1(avg(prior.filter((g) => g.snap != null), (g) => g.snap)),
+      sp: r1(avg(games, (g) => g.pts)),
+      g: games.length,
+      lw: games[games.length - 1].w,
     };
   }
   await writeFile("data/usage.json", JSON.stringify({ updated: today, season, weeks: lastWeek, p }));
   console.log(`usage: ${Object.keys(p).length} players through week ${lastWeek}`);
+}
+
+// Injuries and current team from Sleeper's player file (~5MB, once a day).
+async function injuries() {
+  const all = await getJSON("https://api.sleeper.app/v1/players/nfl");
+  const out = {};
+  for (const [id, p] of Object.entries(all)) {
+    if (!p || !["QB", "RB", "WR", "TE"].includes(p.position)) continue;
+    const st = p.injury_status, roster = p.status;
+    if (!st && (!roster || roster === "Active")) { if (p.team) out[id] = { t: p.team }; continue; }
+    out[id] = { t: p.team ?? null, s: st ?? null, r: roster ?? null, b: p.injury_body_part ?? null, n: p.injury_notes ?? null, d: p.injury_start_date ?? null };
+  }
+  await writeFile("data/injuries.json", JSON.stringify(out));
+  console.log(`injuries: ${Object.values(out).filter((x) => x.s || (x.r && x.r !== "Active")).length} flagged`);
 }
 
 // Headshots: nflverse rosters map Sleeper IDs to NFL.com/ESPN photo URLs.
@@ -174,6 +191,6 @@ await mkdir("data/values", { recursive: true });
 await mkdir("data/history", { recursive: true });
 // Values are required; the rest are optional extras that must not block a refresh.
 await fantasyCalc();
-for (const [name, job] of [["dynastyprocess", dynastyProcess], ["usage", usage], ["headshots", headshots]]) {
+for (const [name, job] of [["dynastyprocess", dynastyProcess], ["usage", usage], ["injuries", injuries], ["headshots", headshots]]) {
   try { await job(); } catch (e) { console.warn(`${name} skipped: ${e.message}`); }
 }

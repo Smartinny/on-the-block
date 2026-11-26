@@ -144,3 +144,18 @@ test("sell variations, asset shopping and impact", () => {
     if (v.key === "solo") console.log(`  impact: winNow ${(imp.winNow * 100).toFixed(1)}% future ${(imp.future * 100).toFixed(1)}% age ${imp.ageBefore.toFixed(1)}→${imp.ageAfter.toFixed(1)} 1sts ${imp.firstsBefore}→${imp.firstsAfter} rank ${imp.theirRankBefore}→${imp.theirRankAfter} lost ${imp.lostStarters}`);
   }
 });
+
+import { availability } from "../src/engine.js";
+
+test("injuries cut win-now value and contender appetite", () => {
+  assert.equal(availability({ t: "BAL", r: "Injured Reserve", b: "Knee" }).f, 0.1);
+  assert.equal(availability({ t: "LAC", s: "Questionable" }).f, 0.9);
+  assert.equal(availability({ t: null }).label, "Free agent");
+  const healthy = { kind: "player", pos: "QB", age: 29, ppg: 22, avail: 1, value: 6000 };
+  const hurt = { ...healthy, avail: 0.1 };
+  assert.ok(lens(hurt, "contend") < lens(healthy, "contend") * 0.6);
+  const fc2 = { players: [{ id: "9", name: "Hurt Guy", pos: "QB", age: 29, v: 6000, rv: 8000, t30: 0 }], picks: [] };
+  const vi = buildValueIndex(fc2, null, settingsFromLeague(league), { usage: { p: { 9: { rp: 24, sp: 22, g: 8 } } }, injuries: { 9: { t: "BAL", r: "Injured Reserve" } } });
+  const p = vi.players.get("9");
+  assert.ok(Math.abs(p.ppg - 23.2) < 0.01 && p.redraft < 3 && p.injury.startsWith("IR"));
+});

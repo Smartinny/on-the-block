@@ -23,6 +23,7 @@ export const loadDP = () => getJSON("./data/values/dp.json", { optional: true })
 export const loadHistory = (variant) => getJSON(`./data/history/${variant}.json`, { optional: true });
 export const loadUsage = () => getJSON("./data/usage.json", { optional: true });
 export const loadHeadshots = () => getJSON("./data/headshots.json", { optional: true });
+export const loadInjuries = () => getJSON("./data/injuries.json", { optional: true });
 
 /** Every dynasty league for a Sleeper username, each built into a model. */
 export async function loadAll(username, onProgress = () => {}) {
@@ -37,7 +38,7 @@ export async function loadAll(username, onProgress = () => {}) {
   });
   onProgress(`Found ${dynasty.length} dynasty leagues`);
   const dp = await loadDP();
-  const [usage, headshots] = await Promise.all([loadUsage(), loadHeadshots()]);
+  const [usage, headshots, injuries] = await Promise.all([loadUsage(), loadHeadshots(), loadInjuries()]);
   const models = await Promise.all(dynasty.map(async (league) => {
     const settings = settingsFromLeague(league);
     const variant = variantKey(settings);
@@ -48,7 +49,7 @@ export async function loadAll(username, onProgress = () => {}) {
       loadValues(variant),
       loadHistory(variant),
     ]);
-    const values = buildValueIndex(fc, dp, settings);
+    const values = buildValueIndex(fc, dp, settings, { usage, injuries: injuries ?? {} });
     const model = buildLeague({ league, rosters, users, tradedPicks, values });
     model.variant = variant;
     model.history = history;

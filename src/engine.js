@@ -49,7 +49,18 @@ export function variantKey(s) {
 }
 
 // ---------- values ----------
-export function buildValueIndex(fc, dp, settings) {
+// How much of a player's weekly scoring you can count on, by Sleeper injury status.
+export const AVAIL = { Questionable: 0.9, Doubtful: 0.5, Out: 0.6, Sus: 0.5, COV: 0.7, IR: 0.1, PUP: 0.1, NA: 0.6, DNR: 0.2 };
+export function availability(inj) {
+  if (!inj) return { f: 1, label: null };
+  if (inj.r && /reserve|pup|ir/i.test(inj.r)) return { f: 0.1, label: `IR${inj.b ? " · " + inj.b : ""}` };
+  if (inj.s && AVAIL[inj.s] != null) return { f: AVAIL[inj.s], label: `${inj.s}${inj.b ? " · " + inj.b : ""}` };
+  if (!inj.t) return { f: 0.2, label: "Free agent" };
+  return { f: 1, label: null };
+}
+
+export function buildValueIndex(fc, dp, settings, extras = {}) {
+  const usage = extras.usage?.p ?? {}, injuries = extras.injuries ?? {};
   const dpMap = new Map();
   for (const r of dp?.players ?? []) {
     const v = settings.numQbs === 2 ? r.v2 : r.v1;
@@ -60,11 +71,16 @@ export function buildValueIndex(fc, dp, settings) {
   for (const p of fc.players) {
     const d = dpMap.get(`${normName(p.name)}|${p.pos}`);
     let value = d != null ? 0.65 * p.v + 0.35 * d : p.v;
-    let redraft = p.rv > 0 ? p.rv : p.v * 0.5;
+    // Win-now = points per game you can count on: recent form + season average, discounted for injury.
+    const u = usage[p.id];
+    const ppg = u && u.g >= 2 ? (u.rp != null && u.sp != null ? 0.6 * u.rp + 0.4 * u.sp : u.sp ?? u.rp) : (p.rv > 0 ? p.rv : p.v * 0.5) / 420;
+    const av = availability(injuries[p.id]);
+    let redraft = ppg * av.f;
     if (p.pos === "TE" && settings.tep > 0) { value *= tepMult; redraft *= tepMult; }
     players.set(p.id, {
-      id: p.id, name: p.name, pos: p.pos, team: p.team, age: p.age != null ? Math.floor(p.age) : null,
-      value: Math.round(value), redraft: Math.round(redraft), fcValue: p.v, trend30: p.t30 ?? 0,
+      id: p.id, name: p.name, pos: p.pos, team: injuries[p.id]?.t ?? p.team, age: p.age != null ? Math.floor(p.age) : null,
+      value: Math.round(value), redraft: Math.round(redraft * 10) / 10, ppg: Math.round(ppg * 10) / 10, avail: av.f, injury: av.label,
+      fcValue: p.v, trend30: p.t30 ?? 0,
     });
   }
   const pickGeneric = new Map(), pickBanded = new Map();
@@ -165,7 +181,7 @@ function pickAsset(season, round, origTeam, settings, values, n) {
 export function playerAsset(id, values) {
   const p = values.players.get(id);
   if (!p) return null;
-  return { key: `p:${id}`, kind: "player", id, label: p.name, pos: p.pos, age: p.age, value: p.value, redraft: p.redraft, team: p.team };
+  return { key: `p:${id}`, kind: "player", id, label: p.name, pos: p.pos, age: p.age, value: p.value, redraft: p.redraft, ppg: p.ppg, avail: p.avail, injury: p.injury, team: p.team };
 }
 
 export function teamAssets(team, values) {
@@ -186,11 +202,13 @@ export function autoMode(team, values) {
 
 export function lens(a, mode) {
   if (a.kind === "pick") return mode === "rebuild" ? 1.12 : mode === "contend" ? 0.85 : 1;
-  if (a.age == null || !AGE_CLIFF[a.pos]) return 1;
+  const hurt = a.avail != null && a.avail < 1 ? a.avail : 1;
+  if (a.age == null || !AGE_CLIFF[a.pos]) return mode === "contend" ? 0.5 + 0.5 * hurt : 1;
   const old = a.age >= AGE_CLIFF[a.pos], young = a.age <= YOUNG[a.pos];
   if (mode === "rebuild") return young ? 1.08 : old ? 0.82 : 1;
-  if (mode === "contend") return old ? 1.06 : young && a.redraft < a.value * 0.35 ? 0.92 : 1;
-  return 1;
+  // Contenders pay for points now: an injured player is worth much less to them.
+  if (mode === "contend") return (old ? 1.06 : young && a.ppg < 8 ? 0.92 : 1) * (0.5 + 0.5 * hurt);
+  return 0.85 + 0.15 * hurt;
 }
 
 export const sideValue = (assets, f = (a) => a.value) =>
@@ -222,6 +240,7 @@ export function packagesForBuyer(model, me, buyer, sellAssets, opts = {}) {
   const sellKeys = new Set(sellAssets.map((a) => a.key));
   const sellRaw = sideValue(sellAssets);
   const beforeTheirs = buyer.lineup;
+  const myBefore = me.lineup;
 
   // What they could send: filtered to what suits your mode, near the right size.
   let pool = teamAssets(buyer, values).filter((a) => a.value >= sellRaw * 0.04 && a.value <= sellRaw * 1.15);
@@ -262,8 +281,15 @@ export function packagesForBuyer(model, me, buyer, sellAssets, opts = {}) {
         const theirDelta = (sideValue(give, (a) => a.value * lens(a, theirMode)) * needBoost) / sideValue(get, (a) => a.value * lens(a, theirMode));
         if (theirDelta < 0.98) continue;
 
+        // Your lineup after: contenders can't give up points now; neutral teams only a little.
+        const getIds = get.filter((a) => a.kind === "player").map((a) => a.id);
+        const giveIdSet = new Set(give.filter((a) => a.kind === "player").map((a) => a.id));
+        const myAfter = bestLineup([...me.playerIds.filter((id) => !giveIdSet.has(id)), ...getIds], settings.slots, values.players).total;
+        const myWinNow = myBefore > 0 ? myAfter / myBefore - 1 : 0;
+        if (myMode === "contend" && myWinNow < -0.03) continue;
+        if (myMode === "neutral" && myWinNow < -0.12) continue;
         const fairness = clamp(1 - Math.abs(ratio - 1.02) / band, 0, 1);
-        const fit = clamp((myDelta - 0.98) / 0.2, 0, 1);
+        const fit = myMode === "contend" ? clamp((myWinNow + 0.03) / 0.1, 0, 1) : clamp((myDelta - 0.98) / 0.2, 0, 1);
         const need = clamp(gainShare * 8, 0, 1);
         const odds = clamp((theirDelta - 0.98) / 0.15, 0, 1);
         // Fewer pieces are easier to accept and cost them fewer roster spots.
@@ -272,7 +298,7 @@ export function packagesForBuyer(model, me, buyer, sellAssets, opts = {}) {
         const extraPlayers = give.filter((a) => a.kind === "player").length - giveIds.size;
         const over = buyer.playerIds.length + extraPlayers - settings.rosterSize;
         out.push({
-          give, get, ratio, myDelta, theirDelta, gain, gainShare, score,
+          give, get, ratio, myDelta, theirDelta, gain, gainShare, myWinNow, score,
           type: typeLabel(give, get),
           odds: theirDelta >= 1.08 ? "Likely" : theirDelta >= 1.0 ? "Fair shot" : "Stretch",
           rosterNote: over > 0 ? `They'll need to drop ${over}` : null,
