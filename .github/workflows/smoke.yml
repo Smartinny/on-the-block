@@ -15,4 +15,4 @@ jobs:
         with:
           node-version: 20
       - run: npm test
-      - run: node scripts/smoke.mjs Smartinny
+      - run: node scripts/smoke.mjs Smartinny "Justin Jefferson"
